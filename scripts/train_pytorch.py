@@ -45,6 +45,7 @@ import openpi.models_pytorch.pi0_pytorch
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.data_loader as _data
+import openpi.training.tensorboard as _tensorboard
 
 
 def init_logging():
@@ -146,7 +147,7 @@ def get_model_parameters(model):
     )
 
 
-def save_checkpoint(model, optimizer, global_step, config, is_main, data_config):
+def save_checkpoint(model, optimizer, global_step, config, is_main, data_config, tb_writer=None):
     """Save a checkpoint with model state, optimizer state, and metadata."""
     if not is_main:
         return
@@ -189,9 +190,11 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config)
 
         logging.info(f"Saved checkpoint at step {global_step} -> {final_ckpt_dir}")
 
-        # Log checkpoint to wandb
+        # Log checkpoint to wandb / TensorBoard
         if config.wandb_enabled:
             wandb.log({"checkpoint_step": global_step}, step=global_step)
+        if tb_writer is not None:
+            tb_writer.add_scalar("train/checkpoint_step", float(global_step), global_step)
 
 
 def load_checkpoint(model, optimizer, checkpoint_dir, device):
@@ -343,8 +346,11 @@ def train_loop(config: _config.TrainConfig):
         logging.info(f"Using existing experiment checkpoint directory: {config.checkpoint_dir}")
 
     # Initialize wandb (only on main process)
+    tb_writer = None
     if is_main:
         init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
+        if config.tensorboard_enabled:
+            tb_writer = _tensorboard.make_writer(config.tensorboard_log_dir)
 
     # Build data loader using the unified data loader
     # Calculate effective batch size per GPU for DDP
@@ -358,8 +364,8 @@ def train_loop(config: _config.TrainConfig):
     # Pass the original batch size to data loader - it will handle DDP splitting internally
     loader, data_config = build_datasets(config)
 
-    # Log sample images to wandb on first batch
-    if is_main and config.wandb_enabled and not resuming:
+    # Log sample images to wandb / TensorBoard on first batch
+    if is_main and (config.wandb_enabled or config.tensorboard_enabled) and not resuming:
         # Create a separate data loader for sample batch to avoid consuming the main loader
         sample_data_loader = _data.create_data_loader(config, framework="pytorch", shuffle=False)
         sample_batch = next(iter(sample_data_loader))
@@ -368,22 +374,24 @@ def train_loop(config: _config.TrainConfig):
         sample_batch = observation.to_dict()
         sample_batch["actions"] = actions
 
-        # Create sample images for wandb
-        images_to_log = []
         # Get batch size from the first image tensor
         batch_size = next(iter(sample_batch["image"].values())).shape[0]
-        for i in range(min(5, batch_size)):
-            # Concatenate all camera views horizontally for this batch item
-            # Convert from NCHW to NHWC format for wandb
-            img_concatenated = torch.cat([img[i].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
-            img_concatenated = img_concatenated.cpu().numpy()
-            images_to_log.append(wandb.Image(img_concatenated))
+        if config.wandb_enabled:
+            images_to_log = []
+            for i in range(min(5, batch_size)):
+                # Concatenate all camera views horizontally for this batch item (NCHW -> NHWC)
+                img_concatenated = torch.cat([img[i].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
+                img_concatenated = img_concatenated.cpu().numpy()
+                images_to_log.append(wandb.Image(img_concatenated))
+            wandb.log({"camera_views": images_to_log}, step=0)
 
-        wandb.log({"camera_views": images_to_log}, step=0)
+        if tb_writer is not None:
+            i0 = 0
+            img_tb = torch.cat([img[i0].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
+            _tensorboard.add_image_hwc(tb_writer, img_tb.cpu().numpy(), 0, tag="train/camera_views")
 
         # Clear sample batch from memory aggressively
-        del sample_batch, observation, actions, images_to_log, img_concatenated
-        del sample_data_loader  # Also delete the sample data loader
+        del sample_batch, observation, actions, sample_data_loader
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -585,8 +593,8 @@ def train_loop(config: _config.TrainConfig):
                     else f"step={global_step} loss={avg_loss:.4f} lr={avg_lr:.2e} time={elapsed:.1f}s"
                 )
 
-                # Log to wandb
-                if config.wandb_enabled and len(infos) > 0:
+                # Log to wandb / TensorBoard
+                if len(infos) > 0:
                     log_payload = {
                         "loss": avg_loss,
                         "learning_rate": avg_lr,
@@ -595,14 +603,16 @@ def train_loop(config: _config.TrainConfig):
                     }
                     if avg_grad_norm is not None:
                         log_payload["grad_norm"] = avg_grad_norm
-                    wandb.log(log_payload, step=global_step)
+                    if config.wandb_enabled:
+                        wandb.log(log_payload, step=global_step)
+                    _tensorboard.add_scalars(tb_writer, log_payload, global_step)
 
                 start_time = time.time()
                 infos = []  # Reset stats collection
 
             global_step += 1
             # Save checkpoint using the new mechanism
-            save_checkpoint(model, optim, global_step, config, is_main, data_config)
+            save_checkpoint(model, optim, global_step, config, is_main, data_config, tb_writer)
 
             # Update progress bar
             if pbar is not None:
@@ -615,9 +625,11 @@ def train_loop(config: _config.TrainConfig):
     if pbar is not None:
         pbar.close()
 
-    # Finish wandb run
-    if is_main and config.wandb_enabled:
-        wandb.finish()
+    # Finish wandb run / TensorBoard writer
+    if is_main:
+        _tensorboard.close_writer(tb_writer)
+        if config.wandb_enabled:
+            wandb.finish()
 
     cleanup_ddp()
 

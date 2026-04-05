@@ -632,6 +632,11 @@ class TrainConfig:
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
 
+    # If true, will log training scalars (and optional sample images) to TensorBoard.
+    tensorboard_enabled: bool = False
+    # If set, TensorBoard event files are written here; default is ``<checkpoint_dir>/tensorboard``.
+    tensorboard_dir: str | None = None
+
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
 
@@ -652,6 +657,15 @@ class TrainConfig:
         if not self.exp_name:
             raise ValueError("--exp_name must be set")
         return (pathlib.Path(self.checkpoint_base_dir) / self.name / self.exp_name).resolve()
+
+    @property
+    def tensorboard_log_dir(self) -> pathlib.Path:
+        """Directory for TensorBoard event files."""
+        if self.tensorboard_dir is not None:
+            return pathlib.Path(self.tensorboard_dir).expanduser().resolve()
+        if not self.exp_name:
+            raise ValueError("--exp_name must be set")
+        return (self.checkpoint_dir / "tensorboard").resolve()
 
     @property
     def trainable_filter(self) -> nnx.filterlib.Filter:
@@ -1074,39 +1088,6 @@ _CONFIGS = [
     ),
 
     TrainConfig(
-        name="pi0_fast_lerobot_dobot_dual",
-        model=pi0_fast.Pi0FASTConfig(action_dim=14, action_horizon=30, max_token_len=180),
-        data=LeRobotAlohaDataConfig(
-            repo_id="physical-intelligence/grab_block_0301_300",
-            adapt_to_pi = False,
-            repack_transforms=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_high": "observation.images.cam_high",
-                                "cam_left_wrist": "observation.images.cam_left_wrist",
-                                "cam_right_wrist": "observation.images.cam_right_wrist",
-                            },
-                            "state": "observation.state",
-                            "actions": "action",
-                            "prompt": "prompt",
-                        }
-                    )
-                ]
-            ),
-            base_config=DataConfig(
-                local_files_only=True,  # Set to True for local-only datasets.
-                prompt_from_task=True,  # Set to True for prompt by task_name
-            ),
-        ),
-        batch_size=32,
-        wandb_enabled=False,
-        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=20_000,
-    ),
-
-    TrainConfig(
         name="pi05_dobot_multi_data",
         project_name="openpi_05_dobot_multi_data",
         # model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=32, max_token_len=200),
@@ -1165,220 +1146,6 @@ _CONFIGS = [
         #     paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         # ).get_freeze_filter(),
         num_train_steps=50_000,
-    ),
-
-    TrainConfig(
-        name="pi0_realman_single_arm",
-        model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=10, max_token_len=180),
-        data=CustomLiberoDataConfig(
-            repo_id="physical-intelligence/test_dp",
-            base_config=DataConfig(
-                local_files_only=True,  # Set to True for local-only datasets.
-                prompt_from_task=True,
-            ),
-        ),
-        # Note that we load the pi0-FAST base model checkpoint here.
-        batch_size=32,
-        wandb_enabled=False,
-        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        num_train_steps=30_000,
-    ),
-
-    TrainConfig(
-        name="pi05_dobot_dual_fold_clothes",
-        project_name="openpi_05_dual_arm_fold_clothes",
-        # model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=32, max_token_len=200),
-        model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True),
-        # model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", action_horizon=32, max_token_len=200),
-        data=LeRobotAlohaDataConfig(
-            assets=AssetsConfig(
-                # assets_dir="/vla/openpi/assets",
-                # asset_id="dobot_multi_data/dobot_norm_stats",
-                assets_dir="/data0/openpi0.5/checkpoints/pi05_base/assets",
-                asset_id="trossen",
-            ),
-            repo_id=[
-            #   "dobot/smart_grab_fruit_0715",
-              "dobot/fold_clothes_3_step_20250904",
-              "dobot/fold_clothes_0825"
-
-            ],
-            adapt_to_pi = False,
-            repack_transforms=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_high": "observation.images.cam_high",
-                                "cam_left_wrist": "observation.images.cam_left_wrist",
-                                "cam_right_wrist": "observation.images.cam_right_wrist",
-                            },
-                            "state": "observation.state",
-                            "actions": "action",
-                            "prompt": "prompt",
-                        }
-                    )
-                ]
-            ),
-            base_config=DataConfig(
-                local_files_only=True,  # Set to True for local-only datasets.
-                prompt_from_task=True,  # Set to True for prompt by task_name
-            ),
-        ),
-        batch_size=4,
-        num_workers=2,
-        overwrite=False,
-        resume=True,
-        wandb_enabled=True,
-        # weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/data0/openpi0.5/checkpoints/pi05_base/params"),
-        # freeze_filter=pi0.Pi0Config(
-        #     paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
-        # ).get_freeze_filter(),
-        num_train_steps=50_000,
-        
-    ),
-        
-
-
-    TrainConfig(
-            name="yumeng_panda_dual_arm",
-            model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200),
-            data=LeRobotAlohaDataConfig(
-                assets=AssetsConfig(
-                    assets_dir="s3://openpi-assets/checkpoints/pi0_base/assets",
-                    asset_id="trossen",
-                ),
-                repo_id=[
-                    "dyl_trail/20260119_panda_dual_arm",
-                ],
-                adapt_to_pi=False,
-                use_delta_joint_actions=False,
-
-                repack_transforms=_transforms.Group(
-                    inputs=[
-                        _transforms.PackDualArmJointGripperState(
-                            left_joint_key="observation.state.arm.left.joint_positions",
-                            left_gripper_key="observation.state.arm.left.end_effector_value",
-                            right_joint_key="observation.state.arm.right.joint_positions",
-                            right_gripper_key="observation.state.arm.right.end_effector_value",
-                            out_key="__packed_state",
-                            drop_source_keys=False,
-                        ),
-                        _transforms.PackDualArmJointGripperActionSequence(
-                            left_joint_key="observation.state.arm.left.joint_positions",
-                            left_gripper_key="observation.state.arm.left.end_effector_value",
-                            right_joint_key="observation.state.arm.right.joint_positions",
-                            right_gripper_key="observation.state.arm.right.end_effector_value",
-                            out_key="__packed_actions",
-                            drop_source_keys=False,
-                        ),
-                        _transforms.RepackTransform(
-                            {
-                                "images": {
-                                    "cam_high": "observation.images.cam_high",
-                                    "cam_left_wrist": "observation.images.cam_left",
-                                    "cam_right_wrist": "observation.images.cam_right",
-                                },
-                                "state": "__packed_state",
-                                "actions": "__packed_actions",
-                                "prompt": "prompt",
-                            }
-                        ),
-                    ]
-                ),
-                action_sequence_keys=(
-                    "observation.state.arm.left.joint_positions",
-                    "observation.state.arm.left.end_effector_value",
-                    "observation.state.arm.right.joint_positions",
-                    "observation.state.arm.right.end_effector_value",
-                ),
-                base_config=DataConfig(
-                    local_files_only=True,
-                    prompt_from_task=True,
-                ),
-            ),
-            batch_size=36,
-            num_workers=2,
-            overwrite=False,
-            resume=True,
-            wandb_enabled=False,
-            weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_base/params"),
-            num_train_steps=50_000,
-        ),
-
-    TrainConfig(
-        name="pi05_realman_l0_single_arm",
-        project_name="openpi_05_single_arm_grab_block",
-        model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True),
-        data=LeRobotAlohaDataConfig(
-            assets=AssetsConfig(
-                assets_dir="/root/data0/openpi_old/assets",
-                asset_id="pi0_realman_l0_single_arm/2026-01-07_00-24-11",
-            ),
-            repo_id=[
-                "single_arm/0510_grab_orange_into_box_low_fre_310",
-                "single_arm/0513_chouti_rgb",
-                "single_arm/0520_inter_with_human_200",
-                "single_arm/0521_greencube_mulity_box",
-                "single_arm/0528_mulitycube_mulitybox",
-                "single_arm/0702_mulitycube_mulity_box",
-                "single_arm/1018_jq_grab_obj_into_box",
-                "single_arm/20250707_grab_no_top",
-                "single_arm/20250904_grab_cube",
-                "single_arm/20250905_grab_cube",
-                "single_arm/20251019",
-                "single_arm/20251020",
-                "single_arm/20251021",
-                "single_arm/20251024_cube_box",
-                "single_arm/20251025_cube_box",
-                "single_arm/20251028_cube_box",
-                "single_arm/20251030_cube_box",
-                "single_arm/20251031_cube_box",
-                "single_arm/20251103_cube_box",
-                "single_arm/20251104_cube_box",
-                "single_arm/20251105_cube_box",
-                "single_arm/20251106_cube_box",
-                "single_arm/20251107_cube_box",
-                "single_arm/20251110_cube_box",
-                "single_arm/20251114_cube_box",
-                "single_arm/20251117_cube_box",
-                "single_arm/20251118_cube_box",
-                "single_arm/20251119_cube_box",
-                "single_arm/20251121_cube_box",
-                "single_arm/20251124_cube_box",
-                "single_arm/20251201_cube_box",
-                "single_arm/20251202_cube_box",
-                ],
-            adapt_to_pi = False,
-            repack_transforms=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_high": "top_image",
-                                "cam_right_wrist": "wrist_image",
-                            },
-                            "state": "state",
-                            "actions": "actions",
-                            "prompt": "prompt",
-                        }
-                    )
-                ]
-            ),
-            action_sequence_keys=("actions",),
-            base_config=DataConfig(
-                local_files_only=True,  # Set to True for local-only datasets.
-                prompt_from_task=True,  # Set to True for prompt by task_name
-            ),
-        ),
-        batch_size=48,
-        wandb_enabled=True,
-        overwrite=False,
-        weight_loader=weight_loaders.CheckpointWeightLoader("/data0/openpi0.5/checkpoints/pi05_base/params"),
-        num_train_steps=50_000,
-        save_interval=2000,
-        keep_period=10000,
     ),
 
 
