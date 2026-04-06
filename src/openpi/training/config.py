@@ -265,7 +265,7 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
         )
         if self.use_delta_joint_actions:
             # delta_action_mask = _transforms.make_bool_mask(6, -1, 6, -1)
-            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            delta_action_mask = _transforms.make_bool_mask(19, -2)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -1088,8 +1088,8 @@ _CONFIGS = [
     ),
 
     TrainConfig(
-        name="pi05_dobot_multi_data",
-        project_name="openpi_05_dobot_multi_data",
+        name="pi05_fold_clothes_merged",
+        project_name="pi05_fold_clothes_merged",
         # model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=32, max_token_len=200),
         model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True),
         # model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", action_horizon=32, max_token_len=200),
@@ -1097,22 +1097,11 @@ _CONFIGS = [
             assets=AssetsConfig(
                 # assets_dir="/vla/openpi/assets",
                 # asset_id="dobot_multi_data/dobot_norm_stats",
-                assets_dir="/data0/openpi0.5/checkpoints/pi05_base/assets",
-                asset_id="trossen",
+                assets_dir="/home/polaris/zch/workspace/openpi0.5/assets",
+                asset_id="pi05_fold_clothes_merged/adam_u",
             ),
             repo_id=[
-            #   "dobot/smart_grab_fruit_0715",
-              "dobot/jq_smart_grab_fruit_out_1016",
-              "dobot/jq_smart_grab_fruit_1016",
-              "dobot/jq_smart_grab_fruit_out_1105",
-              "dobot/jq_smart_grab_fruit_light_on_1020",
-              "dobot/jq_smart_grab_fruit_pos_gen_1022",
-              "dobot/jq_smart_grab_fruit_out_pos_gen_1105",
-              "dobot/jq_smart_fruit_when_fruit_in_plate",
-              "dobot/jq_smart_fruit_1118",
-              "dobot/jq_smart_grab_fruit_out_1128",
-              "dobot/jq_smart_grab_fruit_in_the_plate_0112",
-
+                "fold_clothes_merged"
             ],
             adapt_to_pi = False,
             repack_transforms=_transforms.Group(
@@ -1120,11 +1109,10 @@ _CONFIGS = [
                     _transforms.RepackTransform(
                         {
                             "images": {
-                                "cam_high": "observation.images.cam_high",
-                                "cam_left_wrist": "observation.images.cam_left_wrist",
+                                "cam_high": "observation.images.zed_rgb",
                             },
                             "state": "observation.state",
-                            "actions": "action",
+                            "actions": "observation.state",
                             "prompt": "prompt",
                         }
                     )
@@ -1139,13 +1127,14 @@ _CONFIGS = [
         num_workers=2,
         overwrite=False,
         resume=True,
-        wandb_enabled=True,
+        wandb_enabled=False,
         # weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/data0/openpi0.5/checkpoints/pi05_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/polaris/zch/workspace/openpi0.5/checkpoints/pi05_base/params"),
         # freeze_filter=pi0.Pi0Config(
         #     paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         # ).get_freeze_filter(),
         num_train_steps=50_000,
+        save_interval=5000,
     ),
 
 
