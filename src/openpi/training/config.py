@@ -29,6 +29,7 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
+from openpi.policies import pnd_policy
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -280,6 +281,78 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class PndDataConfig(DataConfigFactory):
+    # If true, convert motor action dims to deltas w.r.t. current state before passing to model.
+    # The last 2 gripper dims remain absolute.
+    use_delta_joint_actions: bool = True
+
+    # If provided, inject into input data when "prompt" key is absent.
+    default_prompt: str | None = None
+
+    # For PND, recommend False by default:
+    # - no joint flip
+    # - gripper already in [0,1]
+    adapt_to_pi: bool = False
+
+    # Repack transforms from LeRobot dataset fields to policy example fields.
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
+        default=_transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "cam_high": "observation.images.zed_rgb",
+                        },
+                        "state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+    )
+
+    # Dataset action keys.
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[pnd_policy.PNDInputs()],
+            outputs=[pnd_policy.PNDOutputs()],
+        )
+
+        if self.use_delta_joint_actions:
+            # 21 dims total:
+            # first 19 motor dims -> delta
+            # last 2 gripper dims -> absolute
+            #
+            # Same style as Aloha:
+            # make_bool_mask(6, -1, 6, -1) means:
+            #   6 True, 1 False, 6 True, 1 False
+            #
+            # Here we want:
+            #   19 True, 2 False
+            delta_action_mask = _transforms.make_bool_mask(19, -2)
+
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
 
 @dataclasses.dataclass(frozen=True)
 class CustomLeRobotAlohaDataConfig(DataConfigFactory):
@@ -1093,7 +1166,7 @@ _CONFIGS = [
         # model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=32, max_token_len=200),
         model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True),
         # model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", action_horizon=32, max_token_len=200),
-        data=LeRobotAlohaDataConfig(
+        data=PndDataConfig(
             assets=AssetsConfig(
                 # assets_dir="/vla/openpi/assets",
                 # asset_id="dobot_multi_data/dobot_norm_stats",
@@ -1101,7 +1174,7 @@ _CONFIGS = [
                 asset_id="pi05_fold_clothes_merged/adam_u",
             ),
             repo_id=[
-                "fold_clothes_merged"
+                "fold_clothes_merged",
             ],
             adapt_to_pi = False,
             repack_transforms=_transforms.Group(
@@ -1133,8 +1206,8 @@ _CONFIGS = [
         # freeze_filter=pi0.Pi0Config(
         #     paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         # ).get_freeze_filter(),
-        num_train_steps=50_000,
-        save_interval=5000,
+        num_train_steps=100000,
+        save_interval=20000,
     ),
 
 
