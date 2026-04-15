@@ -1,6 +1,7 @@
-export HF_LEROBOT_HOME=/data0/lerobot_dataset
-export CUDA_VISIBLE_DEVICES=6
+export HF_LEROBOT_HOME=/home/polaris/zch/workspace/openpi0.5/data
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-  uv run scripts/train.py pi05_dobot_multi_data \
-  --exp-name=cyt_test 
+  python scripts/train.py pi05_fold_clothes_merged \
+  --exp-name=cyt_test \
+  --tensorboard-enabled

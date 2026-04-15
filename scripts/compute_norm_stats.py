@@ -21,12 +21,21 @@ class RemoveStrings(transforms.DataTransformFn):
         return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
 
 
+class KeepKeys(transforms.DataTransformFn):
+    def __init__(self, keys: tuple[str, ...]):
+        self._keys = keys
+
+    def __call__(self, x: dict) -> dict:
+        return {k: x[k] for k in self._keys if k in x}
+
+
 def create_torch_dataloader(
     data_config: _config.DataConfig,
     action_horizon: int,
     batch_size: int,
     model_config: _model.BaseModelConfig,
     num_workers: int,
+    stat_keys: tuple[str, ...],
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
     if data_config.repo_id is None:
@@ -37,10 +46,11 @@ def create_torch_dataloader(
         [
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
+            KeepKeys(stat_keys),
             RemoveStrings(),
         ],
     )
+
     if max_frames is not None and max_frames < len(dataset):
         num_batches = max_frames // batch_size
         shuffle = True
@@ -53,6 +63,7 @@ def create_torch_dataloader(
         num_workers=num_workers,
         shuffle=shuffle,
         num_batches=num_batches,
+        framework="pytorch",
     )
     return data_loader, num_batches
 
@@ -61,6 +72,7 @@ def create_rlds_dataloader(
     data_config: _config.DataConfig,
     action_horizon: int,
     batch_size: int,
+    stat_keys: tuple[str, ...],
     max_frames: int | None = None,
 ) -> tuple[_data_loader.Dataset, int]:
     dataset = _data_loader.create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=False)
@@ -69,6 +81,8 @@ def create_rlds_dataloader(
         [
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
+            # Keep only the tensors that contribute to normalization statistics.
+            KeepKeys(stat_keys),
             # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
             RemoveStrings(),
         ],
@@ -86,29 +100,52 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    stat_keys: tuple[str, ...] = ("state", "actions"),
+):
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
-            data_config, config.model.action_horizon, config.batch_size, max_frames
+            data_config, config.model.action_horizon, config.batch_size, stat_keys, max_frames
         )
     else:
         data_loader, num_batches = create_torch_dataloader(
-            data_config, config.model.action_horizon, config.batch_size, config.model, config.num_workers, max_frames
+            data_config,
+            config.model.action_horizon,
+            config.batch_size,
+            config.model,
+            config.num_workers,
+            stat_keys,
+            max_frames,
         )
 
-    keys = ["state", "actions"]
-    stats = {key: normalize.RunningStats() for key in keys}
+    stats = {key: normalize.RunningStats() for key in stat_keys}
+    missing_keys: set[str] | None = None
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
-        for key in keys:
+        if missing_keys is None:
+            missing_keys = {key for key in stat_keys if key not in batch}
+            if missing_keys:
+                available = ", ".join(sorted(batch))
+                missing = ", ".join(sorted(missing_keys))
+                raise KeyError(
+                    f"Could not find stats keys [{missing}] in the transformed batch. "
+                    f"Available keys: [{available}]. "
+                    "If your dataset uses different normalized fields, pass --stat-keys."
+                )
+        for key in stat_keys:
             stats[key].update(np.asarray(batch[key]))
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    asset_id = data_config.asset_id or data_config.repo_id
+    if asset_id is None:
+        raise ValueError("Data config must have either an asset_id or repo_id to save norm stats.")
+    output_path = config.assets_dirs / asset_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 
