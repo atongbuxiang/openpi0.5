@@ -47,7 +47,7 @@ class PNDInputs(transforms.DataTransformFn):
             "base_0_rgb": base_image,
         }
         image_masks = {
-            "base_0_rgb": np.True_,
+            "base_0_rgb": np.ones((base_image.shape[0],), dtype=np.bool_) if base_image.ndim == 4 else np.True_,
         }
 
         extra_image_names = {
@@ -57,10 +57,10 @@ class PNDInputs(transforms.DataTransformFn):
         for dest, source in extra_image_names.items():
             if source in in_images:
                 images[dest] = in_images[source]
-                image_masks[dest] = np.True_
+                image_masks[dest] = np.ones((images[dest].shape[0],), dtype=np.bool_) if images[dest].ndim == 4 else np.True_
             else:
                 images[dest] = np.zeros_like(base_image)
-                image_masks[dest] = np.False_
+                image_masks[dest] = np.zeros((images[dest].shape[0],), dtype=np.bool_) if images[dest].ndim == 4 else np.False_
 
         inputs = {
             "image": images,
@@ -107,7 +107,11 @@ def _decode_pnd(data: dict) -> dict:
         img = np.asarray(img)
         if np.issubdtype(img.dtype, np.floating):
             img = (255 * img).astype(np.uint8)
-        return einops.rearrange(img, "c h w -> h w c")
+        if img.ndim == 3 and img.shape[0] == 3:
+            return einops.rearrange(img, "c h w -> h w c")
+        if img.ndim == 4 and img.shape[1] == 3:
+            return einops.rearrange(img, "t c h w -> t h w c")
+        return img
 
     images = data["images"]
     images_dict = {name: convert_image(img) for name, img in images.items()}

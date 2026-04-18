@@ -25,8 +25,10 @@ def _parse_image(image) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
+    if image.ndim == 3 and image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    elif image.ndim == 4 and image.shape[1] == 3:
+        image = einops.rearrange(image, "t c h w -> t h w c")
     return image
 
 
@@ -78,9 +80,33 @@ class LeRobotInputs(transforms.DataTransformFn):
                 "right_wrist_0_rgb": right_wrist_image,
             },
             "image_mask": {
-                "base_0_rgb": np.True_,
-                "left_wrist_0_rgb": np.True_ if "cam_left_wrist" in in_images else np.False_ if mask_padding else np.True_,
-                "right_wrist_0_rgb": np.True_ if "cam_right_wrist" in in_images else np.False_ if mask_padding else np.True_,
+                "base_0_rgb": np.ones((base_image.shape[0],), dtype=np.bool_) if base_image.ndim == 4 else np.True_,
+                "left_wrist_0_rgb": (
+                    np.ones((left_wrist_image.shape[0],), dtype=np.bool_)
+                    if left_wrist_image.ndim == 4 and "cam_left_wrist" in in_images
+                    else np.zeros((left_wrist_image.shape[0],), dtype=np.bool_)
+                    if left_wrist_image.ndim == 4 and mask_padding
+                    else np.ones((left_wrist_image.shape[0],), dtype=np.bool_)
+                    if left_wrist_image.ndim == 4
+                    else np.True_
+                    if "cam_left_wrist" in in_images
+                    else np.False_
+                    if mask_padding
+                    else np.True_
+                ),
+                "right_wrist_0_rgb": (
+                    np.ones((right_wrist_image.shape[0],), dtype=np.bool_)
+                    if right_wrist_image.ndim == 4 and "cam_right_wrist" in in_images
+                    else np.zeros((right_wrist_image.shape[0],), dtype=np.bool_)
+                    if right_wrist_image.ndim == 4 and mask_padding
+                    else np.ones((right_wrist_image.shape[0],), dtype=np.bool_)
+                    if right_wrist_image.ndim == 4
+                    else np.True_
+                    if "cam_right_wrist" in in_images
+                    else np.False_
+                    if mask_padding
+                    else np.True_
+                ),
             },
         }
 

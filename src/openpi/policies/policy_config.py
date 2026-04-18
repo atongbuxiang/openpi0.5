@@ -78,6 +78,11 @@ def create_trained_policy(
             *repack_transforms.inputs,
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
+            *(
+                [transforms.OnlineHistoryBuffer(train_config.model.memory_num_frames)]
+                if isinstance(train_config.model, _config.pi0_config.Pi0Config) and train_config.model.memory_num_frames > 1
+                else []
+            ),
             transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
             *data_config.model_transforms.inputs,
         ],

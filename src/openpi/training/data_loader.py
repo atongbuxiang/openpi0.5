@@ -139,10 +139,20 @@ def create_torch_dataset(
 
     if isinstance(repo_id, list):
         dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id[0])
+        image_history_delta_timestamps = None
+        if hasattr(model_config, "memory_num_frames"):
+            memory_num_frames = getattr(model_config, "memory_num_frames", 1)
+            if memory_num_frames > 1:
+                image_history_delta_timestamps = [
+                    -(memory_num_frames - 1 - i) / dataset_meta.fps for i in range(memory_num_frames)
+                ]
         delta_timestamps = {
             key: [t / dataset_meta.fps for t in range(model_config.action_horizon)]
             for key in data_config.action_sequence_keys
         }
+        if image_history_delta_timestamps is not None:
+            for key in dataset_meta.camera_keys:
+                delta_timestamps[key] = image_history_delta_timestamps
         dataset = lerobot_dataset.MultiLeRobotDataset(
             repo_ids=repo_id, 
             delta_timestamps=delta_timestamps, 
@@ -166,11 +176,22 @@ def create_torch_dataset(
     
     else:
         dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        image_history_delta_timestamps = None
+        if hasattr(model_config, "memory_num_frames"):
+            memory_num_frames = getattr(model_config, "memory_num_frames", 1)
+            if memory_num_frames > 1:
+                image_history_delta_timestamps = [
+                    -(memory_num_frames - 1 - i) / dataset_meta.fps for i in range(memory_num_frames)
+                ]
+        delta_timestamps = {
+            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
+        }
+        if image_history_delta_timestamps is not None:
+            for key in dataset_meta.camera_keys:
+                delta_timestamps[key] = image_history_delta_timestamps
         dataset = lerobot_dataset.LeRobotDataset(
             data_config.repo_id,
-            delta_timestamps={
-                key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
-            },
+            delta_timestamps=delta_timestamps,
             local_files_only=data_config.local_files_only,
             tolerance_s=50.0,
         )

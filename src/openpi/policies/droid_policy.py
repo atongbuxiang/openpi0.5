@@ -22,8 +22,10 @@ def _parse_image(image) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
+    if image.ndim == 3 and image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    elif image.ndim == 4 and image.shape[1] == 3:
+        image = einops.rearrange(image, "t c h w -> t h w c")
     return image
 
 
@@ -60,7 +62,10 @@ class DroidInputs(transforms.DataTransformFn):
         inputs = {
             "state": state,
             "image": dict(zip(names, images, strict=True)),
-            "image_mask": dict(zip(names, image_masks, strict=True)),
+            "image_mask": {
+                name: (np.ones((img.shape[0],), dtype=np.bool_) if np.asarray(img).ndim == 4 else mask)
+                for name, img, mask in zip(names, images, image_masks, strict=True)
+            },
         }
 
         if "actions" in data:

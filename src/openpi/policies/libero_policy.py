@@ -21,8 +21,10 @@ def _parse_image(image) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
+    if image.ndim == 3 and image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    elif image.ndim == 4 and image.shape[1] == 3:
+        image = einops.rearrange(image, "t c h w -> t h w c")
     return image
 
 
@@ -62,10 +64,18 @@ class LiberoInputs(transforms.DataTransformFn):
                 "right_wrist_0_rgb": np.zeros_like(base_image),
             },
             "image_mask": {
-                "base_0_rgb": np.True_,
-                "left_wrist_0_rgb": np.True_,
+                "base_0_rgb": np.ones((base_image.shape[0],), dtype=np.bool_) if base_image.ndim == 4 else np.True_,
+                "left_wrist_0_rgb": np.ones((wrist_image.shape[0],), dtype=np.bool_) if wrist_image.ndim == 4 else np.True_,
                 # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
-                "right_wrist_0_rgb": np.True_ if self.model_type == _model.ModelType.PI0_FAST else np.False_,
+                "right_wrist_0_rgb": (
+                    np.ones((base_image.shape[0],), dtype=np.bool_)
+                    if (base_image.ndim == 4 and self.model_type == _model.ModelType.PI0_FAST)
+                    else np.zeros((base_image.shape[0],), dtype=np.bool_)
+                    if base_image.ndim == 4
+                    else np.True_
+                    if self.model_type == _model.ModelType.PI0_FAST
+                    else np.False_
+                ),
             },
         }
 
