@@ -1,3 +1,4 @@
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import re
@@ -192,6 +193,105 @@ class ResizeImages(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         data["image"] = {k: image_tools.resize_with_pad(v, self.height, self.width) for k, v in data["image"].items()}
         return data
+
+
+@dataclasses.dataclass(frozen=True)
+class StackHistory(DataTransformFn):
+    """Stacks current and historical image keys into `[T, H, W, C]`.
+
+    The input is expected to be in the common `"image"` / `"image_mask"` format after
+    dataset-specific transforms have run.
+    """
+
+    num_frames: int
+    image_keys: Sequence[str] | None = None
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.num_frames <= 1:
+            return data
+        if "image" not in data:
+            return data
+
+        image_keys = tuple(self.image_keys or tuple(data["image"].keys()))
+        output_images = dict(data["image"])
+        output_masks = dict(data.get("image_mask", {}))
+
+        for key in image_keys:
+            image = np.asarray(output_images[key])
+            mask = np.asarray(output_masks.get(key, np.True_))
+            if image.ndim == 3:
+                image = np.repeat(image[None, ...], self.num_frames, axis=0)
+                mask = np.repeat(np.asarray(mask)[None, ...], self.num_frames, axis=0)
+            elif image.ndim != 4:
+                raise ValueError(f"Expected image {key} to have ndim 3 or 4, got {image.shape}")
+
+            if image.shape[0] != self.num_frames:
+                if image.shape[0] > self.num_frames:
+                    image = image[-self.num_frames :]
+                    mask = np.asarray(mask)[-self.num_frames :]
+                else:
+                    pad_count = self.num_frames - image.shape[0]
+                    image_pad = np.repeat(image[:1], pad_count, axis=0)
+                    mask_pad = np.zeros((pad_count,), dtype=np.bool_)
+                    image = np.concatenate([image_pad, image], axis=0)
+                    mask = np.concatenate([mask_pad, np.asarray(mask)], axis=0)
+
+            output_images[key] = image
+            output_masks[key] = np.asarray(mask, dtype=np.bool_)
+
+        return {**data, "image": output_images, "image_mask": output_masks}
+
+
+@dataclasses.dataclass
+class OnlineHistoryBuffer(DataTransformFn):
+    """Stateful history buffer for policy inference.
+
+    Converts a stream of single-frame images into `[T, H, W, C]` short videos.
+    """
+
+    num_frames: int
+    image_keys: Sequence[str] | None = None
+
+    def __post_init__(self):
+        self._buffers = {}
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.num_frames <= 1 or "image" not in data:
+            return data
+
+        image_keys = tuple(self.image_keys or tuple(data["image"].keys()))
+        output_images = dict(data["image"])
+        output_masks = dict(data.get("image_mask", {}))
+
+        for key in image_keys:
+            image = np.asarray(output_images[key])
+            if image.ndim == 4:
+                output_images[key] = image
+                mask = np.asarray(output_masks.get(key, np.ones((image.shape[0],), dtype=np.bool_)), dtype=np.bool_)
+                output_masks[key] = mask
+                self._buffers[key] = deque([frame.copy() for frame in image], maxlen=self.num_frames)
+                continue
+            if image.ndim != 3:
+                raise ValueError(f"Expected image {key} to have ndim 3 or 4, got {image.shape}")
+
+            if key not in self._buffers:
+                self._buffers[key] = deque(maxlen=self.num_frames)
+            self._buffers[key].append(image.copy())
+
+            frames = list(self._buffers[key])
+            pad = self.num_frames - len(frames)
+            if pad > 0:
+                zero = np.zeros_like(image)
+                stacked = [zero for _ in range(pad)] + frames
+                mask = np.array([False] * pad + [True] * len(frames), dtype=np.bool_)
+            else:
+                stacked = frames
+                mask = np.ones((self.num_frames,), dtype=np.bool_)
+
+            output_images[key] = np.stack(stacked, axis=0)
+            output_masks[key] = mask
+
+        return {**data, "image": output_images, "image_mask": output_masks}
 
 
 @dataclasses.dataclass(frozen=True)

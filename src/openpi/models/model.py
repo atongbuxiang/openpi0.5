@@ -56,11 +56,11 @@ IMAGE_RESOLUTION = (224, 224)
 # {
 #     # Observation data.
 #     "image": {
-#         "base_0_rgb": (float32|uint8)[*b, h, w, 3],  # RGB image in [-1, 1] or [0, 255]
+#         "base_0_rgb": (float32|uint8)[*b, h, w, 3] or [*b, t, h, w, 3],  # RGB image(s) in [-1, 1] or [0, 255]
 #         ...  # Additional camera views
 #     },
 #     "image_mask": {
-#         "base_0_rgb": bool[*b],  # True if image is valid
+#         "base_0_rgb": bool[*b] or bool[*b, t],  # True if image is valid
 #         ...  # Masks for additional views
 #     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
@@ -87,10 +87,11 @@ class Observation(Generic[ArrayT]):
     that should be produced by the data transforms.
     """
 
-    # Images, in [-1, 1] float32.
-    images: dict[str, at.Float[ArrayT, "*b h w c"]]
+    # Images, in [-1, 1] float32. Supports either single-frame `[... h w c]` or
+    # short video `[... t h w c]`.
+    images: dict[str, ArrayT]
     # Image masks, with same keys as images.
-    image_masks: dict[str, at.Bool[ArrayT, "*b"]]
+    image_masks: dict[str, ArrayT]
     # Low-dimensional robot state.
     state: at.Float[ArrayT, "*b s"]
 
@@ -117,7 +118,12 @@ class Observation(Generic[ArrayT]):
             if data["image"][key].dtype == np.uint8:
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
             elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
-                data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
+                if data["image"][key].ndim == 4:
+                    data["image"][key] = data["image"][key].to(torch.float32) / 255.0 * 2.0 - 1.0
+                elif data["image"][key].ndim == 5:
+                    data["image"][key] = data["image"][key].to(torch.float32) / 255.0 * 2.0 - 1.0
+                else:
+                    raise ValueError(f"Unsupported torch image rank for key {key}: {data['image'][key].shape}")
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],
@@ -161,11 +167,19 @@ def preprocess_observation(
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
-        if image.shape[1:3] != image_resolution:
-            logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
+        if image.ndim not in (4, 5):
+            raise ValueError(f"Image {key} must have rank 4 or 5, got {image.shape}")
+
+        image_hw = image.shape[-3:-1]
+        if image_hw != image_resolution:
+            logger.info(f"Resizing image {key} from {image_hw} to {image_resolution}")
             image = image_tools.resize_with_pad(image, *image_resolution)
 
         if train:
+            is_video = image.ndim == 5
+            original_shape = image.shape
+            if is_video:
+                image = image.reshape((-1, *image.shape[-3:]))
             # Convert from [-1, 1] to [0, 1] for augmax.
             image = image / 2.0 + 0.5
 
@@ -185,6 +199,8 @@ def preprocess_observation(
 
             # Back to [-1, 1].
             image = image * 2.0 - 1.0
+            if is_video:
+                image = image.reshape(original_shape)
 
         out_images[key] = image
 
@@ -193,9 +209,15 @@ def preprocess_observation(
     for key in out_images:
         if key not in observation.image_masks:
             # do not mask by default
-            out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool)
+            if out_images[key].ndim == 5:
+                out_masks[key] = jnp.ones((*batch_shape, out_images[key].shape[-4]), dtype=jnp.bool_)
+            else:
+                out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool_)
         else:
-            out_masks[key] = jnp.asarray(observation.image_masks[key])
+            mask = jnp.asarray(observation.image_masks[key])
+            if out_images[key].ndim == 4 and mask.ndim == len(batch_shape) + 1:
+                mask = mask[..., -1]
+            out_masks[key] = mask
 
     return Observation(
         images=out_images,

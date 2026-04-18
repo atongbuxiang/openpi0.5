@@ -119,3 +119,27 @@ def test_extract_prompt_from_task():
 
     with pytest.raises(ValueError, match="task_index=2 not found in task mapping"):
         transform({"task_index": 2})
+
+
+def test_stack_history_single_frame():
+    transform = _transforms.StackHistory(num_frames=4)
+    image = np.ones((8, 8, 3), dtype=np.uint8)
+    item = {
+        "image": {"base_0_rgb": image},
+        "image_mask": {"base_0_rgb": np.True_},
+    }
+    out = transform(item)
+    assert out["image"]["base_0_rgb"].shape == (4, 8, 8, 3)
+    assert out["image_mask"]["base_0_rgb"].shape == (4,)
+    assert np.all(out["image_mask"]["base_0_rgb"])
+
+
+def test_online_history_buffer():
+    transform = _transforms.OnlineHistoryBuffer(num_frames=3)
+    image = np.ones((4, 4, 3), dtype=np.uint8)
+    item = {"image": {"base_0_rgb": image}, "image_mask": {"base_0_rgb": np.True_}}
+    out1 = transform(item)
+    assert out1["image"]["base_0_rgb"].shape == (3, 4, 4, 3)
+    assert np.array_equal(out1["image_mask"]["base_0_rgb"], np.array([False, False, True]))
+    out2 = transform(item)
+    assert np.array_equal(out2["image_mask"]["base_0_rgb"], np.array([False, True, True]))

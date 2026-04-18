@@ -11,6 +11,7 @@ from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
+import openpi.models.video_siglip as _video_siglip
 from openpi.shared import array_typing as at
 
 logger = logging.getLogger("openpi")
@@ -87,9 +88,33 @@ class Pi0(_model.BaseModel):
                 dtype_mm=config.dtype,
             )
         )
-        img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
-        self.PaliGemma = nnx.Dict(llm=llm, img=img)
+        sample_image = next(iter(config.fake_obs().images.values()))
+        if sample_image.ndim == 5:
+            sample_image = sample_image[:, -1]
+        img.lazy_init(sample_image, train=False, rngs=rngs)
+        modules = {"llm": llm, "img": img}
+        if config.memory_num_frames > 1:
+            memory_img = nnx_bridge.ToNNX(
+                _video_siglip.Module(
+                    num_classes=paligemma_config.width,
+                    variant="So400m/14",
+                    pool_type="none",
+                    scan=False,
+                    dtype_mm=config.dtype,
+                    history_pool_tokens=config.memory_history_pool_tokens,
+                    keep_full_current_tokens=config.memory_keep_current_full_tokens,
+                )
+            )
+            memory_img.lazy_init(
+                next(iter(config.fake_obs().images.values())),
+                next(iter(config.fake_obs().image_masks.values())),
+                train=False,
+                rngs=rngs,
+            )
+            modules["memory_img"] = memory_img
+        self.PaliGemma = nnx.Dict(**modules)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
+        self.memory_num_frames = config.memory_num_frames
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -111,12 +136,21 @@ class Pi0(_model.BaseModel):
         tokens = []
         # embed images
         for name in obs.images:
-            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
+            image = obs.images[name]
+            image_mask = obs.image_masks[name]
+            if image.ndim == 5:
+                if not hasattr(self.PaliGemma, "memory_img"):
+                    raise ValueError("Received video observations but memory encoder is not initialized.")
+                image_tokens, _ = self.PaliGemma.memory_img(image, image_mask, train=False)
+                prefix_mask = jnp.any(image_mask, axis=-1)
+            else:
+                image_tokens, _ = self.PaliGemma.img(image, train=False)
+                prefix_mask = image_mask
 
             tokens.append(image_tokens)
             input_mask.append(
                 einops.repeat(
-                    obs.image_masks[name],
+                    prefix_mask,
                     "b -> b s",
                     s=image_tokens.shape[1],
                 )

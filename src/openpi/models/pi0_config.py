@@ -20,6 +20,9 @@ class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
     paligemma_variant: _gemma.Variant = "gemma_2b"
     action_expert_variant: _gemma.Variant = "gemma_300m"
+    memory_num_frames: int = 1
+    memory_history_pool_tokens: int = 8
+    memory_keep_current_full_tokens: bool = True
 
     # Set the model specific defaults.
     action_dim: int = 32
@@ -53,8 +56,12 @@ class Pi0Config(_model.BaseModelConfig):
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
-        image_spec = jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
-        image_mask_spec = jax.ShapeDtypeStruct([batch_size], jnp.bool_)
+        if self.memory_num_frames > 1:
+            image_spec = jax.ShapeDtypeStruct([batch_size, self.memory_num_frames, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
+            image_mask_spec = jax.ShapeDtypeStruct([batch_size, self.memory_num_frames], jnp.bool_)
+        else:
+            image_spec = jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
+            image_mask_spec = jax.ShapeDtypeStruct([batch_size], jnp.bool_)
 
         with at.disable_typechecking():
             observation_spec = _model.Observation(
