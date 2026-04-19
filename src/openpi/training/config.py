@@ -1171,10 +1171,10 @@ _CONFIGS = [
     ),
 
     TrainConfig(
-        name="pi05_fold_clothes_merged",
-        project_name="pi05_fold_clothes_merged",
+        name="pi05_fold_clothes_short_mem",
+        project_name="pi05_fold_clothes_merged_short_mem",
         # model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=32, max_token_len=200),
-        model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True),
+        model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True, memory_num_frames=8, memory_frame_stride=5,memory_history_pool_tokens=16),
         # model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", action_horizon=32, max_token_len=200),
         data=PndDataConfig(
             assets=AssetsConfig(
