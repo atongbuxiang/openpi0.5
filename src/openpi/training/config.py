@@ -1181,7 +1181,7 @@ _CONFIGS = [
                 # assets_dir="/vla/openpi/assets",
                 # asset_id="dobot_multi_data/dobot_norm_stats",
                 assets_dir="/home/polaris/zch/workspace/openpi0.5/assets",
-                asset_id="pi05_fold_clothes_merged/adam_u",
+                asset_id="fold_clothes_merged",
             ),
             repo_id=[
                 "fold_clothes_merged",
