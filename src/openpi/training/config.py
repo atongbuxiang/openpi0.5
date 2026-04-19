@@ -17,9 +17,12 @@ import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
+from openpi.policies import pnd_policy
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.franka_policy as franka_policy
 import openpi.policies.libero_policy as libero_policy
+
 # import openpi.policies.lerobot_policy as lerobot_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -29,7 +32,6 @@ import openpi.training.misc.roboarena_config as roboarena_config
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
-from openpi.policies import pnd_policy
 
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -358,6 +360,79 @@ class PndDataConfig(DataConfigFactory):
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class FrankaDataConfig(DataConfigFactory):
+    # If true, convert the 7 joint action dims to deltas w.r.t. current state.
+    # The last gripper dim remains absolute.
+    use_delta_joint_actions: bool = True
+
+    # If provided, inject into input data when "prompt" key is absent.
+    default_prompt: str | None = None
+
+    # Repack transforms from LeRobot dataset fields to Franka policy example fields.
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
+        default=_transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "base": "observation.images.cam_high",
+                            "wrist": "observation.images.cam_wrist",
+                        },
+                        "state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+    )
+
+
+    # Dataset action keys.
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transforms = self.repack_transforms or _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "base": "observation.images.cam_high",
+                            "wrist": "observation.images.cam_wrist",
+                        },
+                        "state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[franka_policy.FrankaInputs(model_type=model_config.model_type)],
+            outputs=[franka_policy.FrankaOutputs()],
+        )
+
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(7, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transforms,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
@@ -1220,6 +1295,55 @@ _CONFIGS = [
         save_interval=20000,
     ),
 
+    TrainConfig(
+        name="pi05_franka_pick_apple",
+        project_name="pi05_franka_pick_apple",
+        # model=pi0_fast.Pi0FASTConfig(action_dim=7, action_horizon=32, max_token_len=200),
+        model=pi0_config.Pi0Config(action_horizon=32, max_token_len=200, pi05=True),
+        # model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora", action_horizon=32, max_token_len=200),
+        data=FrankaDataConfig(
+            assets=AssetsConfig(
+                # assets_dir="/vla/openpi/assets",
+                # asset_id="dobot_multi_data/dobot_norm_stats",
+                assets_dir="/home/polaris/zch/workspace/openpi0.5/assets",
+                asset_id="pi05_fold_clothes_merged/adam_u",
+            ),
+            repo_id=[
+                "pick_apple_4_18",
+            ],
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                        "images": {
+                            "base": "observation.images.third_person",
+                            "wrist": "observation.images.wrist",
+                        },
+                        "state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                    )
+                ]
+            ),
+            base_config=DataConfig(
+                local_files_only=True,  # Set to True for local-only datasets.
+                prompt_from_task=True,  # Set to True for prompt by task_name
+            ),
+        ),
+        batch_size=4,
+        num_workers=2,
+        overwrite=False,
+        resume=True,
+        wandb_enabled=False,
+        # weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_fast_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/polaris/zch/workspace/openpi0.5/checkpoints/pi05_base/params"),
+        # freeze_filter=pi0.Pi0Config(
+        #     paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        # ).get_freeze_filter(),
+        num_train_steps=50000,
+        save_interval=10000,
+    ),
 
     # RoboArena & PolaRiS configs.
     *roboarena_config.get_roboarena_configs(),
