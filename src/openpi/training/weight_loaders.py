@@ -87,6 +87,8 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
 
+    _bootstrap_video_memory_params(flat_loaded, flat_ref)
+
     # First, take all weights that are a subset of the reference weights.
     result = {}
     for k, v in flat_loaded.items():
@@ -102,3 +104,89 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
             result[k] = flat_ref[k]
 
     return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+def _bootstrap_video_memory_params(flat_loaded: dict[str, np.ndarray], flat_ref: dict[str, np.ndarray]) -> None:
+    """Warm-start memory_img from img weights when loading old checkpoints.
+
+    Old pi0/pi0.5 checkpoints do not contain `PaliGemma/memory_img/*`. For the
+    new short-memory model we can still initialize a large subset of the video
+    encoder from the 2D SigLIP encoder:
+    - stem / pos_embedding / head copy directly
+    - spatial attention + MLP blocks copy from the corresponding SigLIP block
+    - temporal-only layers remain randomly initialized from the reference params
+    """
+    memory_prefix = "PaliGemma/memory_img/"
+    image_prefix = "PaliGemma/img/"
+    if any(k.startswith(memory_prefix) for k in flat_loaded):
+        return
+    if not any(k.startswith(image_prefix) for k in flat_loaded):
+        return
+
+    for ref_key, ref_value in flat_ref.items():
+        if not ref_key.startswith(memory_prefix):
+            continue
+
+        src_key = _map_memory_key_to_image_key(ref_key)
+        if src_key is None:
+            continue
+        if src_key not in flat_loaded:
+            continue
+
+        src_value = flat_loaded[src_key]
+        if getattr(src_value, "shape", None) != getattr(ref_value, "shape", None):
+            continue
+        flat_loaded[ref_key] = src_value.astype(ref_value.dtype) if src_value.dtype != ref_value.dtype else src_value
+
+
+def _map_memory_key_to_image_key(memory_key: str) -> str | None:
+    if not memory_key.startswith("PaliGemma/memory_img/"):
+        return None
+
+    suffix = memory_key[len("PaliGemma/memory_img/") :]
+
+    direct_mappings = {
+        "embedding/kernel": "embedding/kernel",
+        "embedding/bias": "embedding/bias",
+        "pos_embedding": "pos_embedding",
+        "head/kernel": "head/kernel",
+        "head/bias": "head/bias",
+        "Transformer/encoder_norm/scale": "Transformer/encoder_norm/scale",
+        "Transformer/encoder_norm/bias": "Transformer/encoder_norm/bias",
+    }
+    if suffix in direct_mappings:
+        return f"PaliGemma/img/{direct_mappings[suffix]}"
+
+    if not suffix.startswith("Transformer/encoderblock_"):
+        return None
+
+    rest = suffix[len("Transformer/encoderblock_") :]
+    block_idx_str, _, block_suffix = rest.partition("/")
+    if not block_idx_str.isdigit() or not block_suffix:
+        return None
+
+    block_idx = int(block_idx_str)
+    img_block_prefix = f"PaliGemma/img/Transformer/encoderblock"
+
+    block_mappings = {
+        "spatial_ln/scale": f"{img_block_prefix}/LayerNorm_0/scale",
+        "spatial_ln/bias": f"{img_block_prefix}/LayerNorm_0/bias",
+        "mlp_ln/scale": f"{img_block_prefix}/LayerNorm_1/scale",
+        "mlp_ln/bias": f"{img_block_prefix}/LayerNorm_1/bias",
+        "spatial_attn/query/kernel": f"{img_block_prefix}/MultiHeadDotProductAttention_0/query/kernel",
+        "spatial_attn/query/bias": f"{img_block_prefix}/MultiHeadDotProductAttention_0/query/bias",
+        "spatial_attn/key/kernel": f"{img_block_prefix}/MultiHeadDotProductAttention_0/key/kernel",
+        "spatial_attn/key/bias": f"{img_block_prefix}/MultiHeadDotProductAttention_0/key/bias",
+        "spatial_attn/value/kernel": f"{img_block_prefix}/MultiHeadDotProductAttention_0/value/kernel",
+        "spatial_attn/value/bias": f"{img_block_prefix}/MultiHeadDotProductAttention_0/value/bias",
+        "spatial_attn/out/kernel": f"{img_block_prefix}/MultiHeadDotProductAttention_0/out/kernel",
+        "spatial_attn/out/bias": f"{img_block_prefix}/MultiHeadDotProductAttention_0/out/bias",
+        "mlp/Dense_0/kernel": f"{img_block_prefix}/MlpBlock_0/Dense_0/kernel",
+        "mlp/Dense_0/bias": f"{img_block_prefix}/MlpBlock_0/Dense_0/bias",
+        "mlp/Dense_1/kernel": f"{img_block_prefix}/MlpBlock_0/Dense_1/kernel",
+        "mlp/Dense_1/bias": f"{img_block_prefix}/MlpBlock_0/Dense_1/bias",
+    }
+    if block_suffix not in block_mappings:
+        return None
+
+    return f"{block_mappings[block_suffix]}/{block_idx}"
