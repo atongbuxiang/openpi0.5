@@ -127,19 +127,24 @@ def _bootstrap_video_memory_params(flat_loaded: dict[str, np.ndarray], flat_ref:
         if not ref_key.startswith(memory_prefix):
             continue
 
-        src_key = _map_memory_key_to_image_key(ref_key)
-        if src_key is None:
+        src_spec = _map_memory_key_to_image_source(ref_key)
+        if src_spec is None:
             continue
+        src_key, src_index = src_spec
         if src_key not in flat_loaded:
             continue
 
         src_value = flat_loaded[src_key]
+        if src_index is not None:
+            if src_value.ndim == 0 or src_index >= src_value.shape[0]:
+                continue
+            src_value = src_value[src_index]
         if getattr(src_value, "shape", None) != getattr(ref_value, "shape", None):
             continue
         flat_loaded[ref_key] = src_value.astype(ref_value.dtype) if src_value.dtype != ref_value.dtype else src_value
 
 
-def _map_memory_key_to_image_key(memory_key: str) -> str | None:
+def _map_memory_key_to_image_source(memory_key: str) -> tuple[str, int | None] | None:
     if not memory_key.startswith("PaliGemma/memory_img/"):
         return None
 
@@ -155,7 +160,7 @@ def _map_memory_key_to_image_key(memory_key: str) -> str | None:
         "Transformer/encoder_norm/bias": "Transformer/encoder_norm/bias",
     }
     if suffix in direct_mappings:
-        return f"PaliGemma/img/{direct_mappings[suffix]}"
+        return f"PaliGemma/img/{direct_mappings[suffix]}", None
 
     if not suffix.startswith("Transformer/encoderblock_"):
         return None
@@ -189,4 +194,4 @@ def _map_memory_key_to_image_key(memory_key: str) -> str | None:
     if block_suffix not in block_mappings:
         return None
 
-    return f"{block_mappings[block_suffix]}/{block_idx}"
+    return block_mappings[block_suffix], block_idx

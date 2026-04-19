@@ -74,7 +74,21 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
-    at.check_pytree_equality(expected=params_shape, got=loaded_params, check_shapes=True, check_dtypes=True)
+
+    flat_expected = traverse_util.flatten_dict(params_shape)
+    flat_loaded = traverse_util.flatten_dict(loaded_params)
+    for key_path, value in flat_loaded.items():
+        if key_path not in flat_expected:
+            raise ValueError(f"Loaded weights contain unexpected parameter key: {jax.tree_util.keystr(key_path)}")
+        expected_value = flat_expected[key_path]
+        if value.shape != expected_value.shape:
+            raise ValueError(
+                f"Shape mismatch at {jax.tree_util.keystr(key_path)}: expected {expected_value.shape}, got {value.shape}"
+            )
+        if value.dtype != expected_value.dtype:
+            raise ValueError(
+                f"Dtype mismatch at {jax.tree_util.keystr(key_path)}: expected {expected_value.dtype}, got {value.dtype}"
+            )
 
     # Remove jax.ShapeDtypeStruct from the loaded params. This makes sure that only the loaded params are returned.
     return traverse_util.unflatten_dict(
