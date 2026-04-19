@@ -379,16 +379,14 @@ def train_loop(config: _config.TrainConfig):
         if config.wandb_enabled:
             images_to_log = []
             for i in range(min(5, batch_size)):
-                # Concatenate all camera views horizontally for this batch item (NCHW -> NHWC)
-                img_concatenated = torch.cat([img[i].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
-                img_concatenated = img_concatenated.cpu().numpy()
+                img_concatenated = _tensorboard.make_camera_views_image(sample_batch["image"], batch_index=i)
                 images_to_log.append(wandb.Image(img_concatenated))
             wandb.log({"camera_views": images_to_log}, step=0)
 
         if tb_writer is not None:
             i0 = 0
-            img_tb = torch.cat([img[i0].permute(1, 2, 0) for img in sample_batch["image"].values()], axis=1)
-            _tensorboard.add_image_hwc(tb_writer, img_tb.cpu().numpy(), 0, tag="train/camera_views")
+            img_tb = _tensorboard.make_camera_views_image(sample_batch["image"], batch_index=i0)
+            _tensorboard.add_image_hwc(tb_writer, img_tb, 0, tag="train/camera_views")
 
         # Clear sample batch from memory aggressively
         del sample_batch, observation, actions, sample_data_loader

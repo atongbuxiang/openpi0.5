@@ -232,13 +232,13 @@ def main(config: _config.TrainConfig):
     # Log images from first batch to sanity check.
     if config.wandb_enabled:
         images_to_log = [
-            wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+            wandb.Image(_tensorboard.make_camera_views_image(batch[0].images, batch_index=i))
             for i in range(min(5, len(next(iter(batch[0].images.values())))))
         ]
         wandb.log({"camera_views": images_to_log}, step=0)
     if tb_writer is not None:
         i0 = 0
-        sample_hwc = np.concatenate([np.array(img[i0]) for img in batch[0].images.values()], axis=1)
+        sample_hwc = _tensorboard.make_camera_views_image(batch[0].images, batch_index=i0)
         _tensorboard.add_image_hwc(tb_writer, sample_hwc, 0, tag="train/camera_views")
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
