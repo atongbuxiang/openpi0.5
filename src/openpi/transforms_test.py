@@ -134,6 +134,20 @@ def test_stack_history_single_frame():
     assert np.all(out["image_mask"]["base_0_rgb"])
 
 
+def test_stack_history_sparse_stride():
+    transform = _transforms.StackHistory(num_frames=3, frame_stride=2)
+    image = np.stack([np.full((2, 2, 1), i, dtype=np.uint8) for i in range(5)], axis=0)
+    item = {
+        "image": {"base_0_rgb": image},
+        "image_mask": {"base_0_rgb": np.ones((5,), dtype=np.bool_)},
+    }
+    out = transform(item)
+    sampled = out["image"]["base_0_rgb"][..., 0]
+    assert sampled.shape == (3, 2, 2)
+    assert np.array_equal(sampled[:, 0, 0], np.array([0, 2, 4], dtype=np.uint8))
+    assert np.array_equal(out["image_mask"]["base_0_rgb"], np.array([True, True, True]))
+
+
 def test_online_history_buffer():
     transform = _transforms.OnlineHistoryBuffer(num_frames=3)
     image = np.ones((4, 4, 3), dtype=np.uint8)
@@ -143,3 +157,28 @@ def test_online_history_buffer():
     assert np.array_equal(out1["image_mask"]["base_0_rgb"], np.array([False, False, True]))
     out2 = transform(item)
     assert np.array_equal(out2["image_mask"]["base_0_rgb"], np.array([False, True, True]))
+
+
+def test_online_history_buffer_sparse_stride():
+    transform = _transforms.OnlineHistoryBuffer(num_frames=3, frame_stride=2)
+
+    def make_item(value: int):
+        image = np.full((2, 2, 1), value, dtype=np.uint8)
+        return {"image": {"base_0_rgb": image}, "image_mask": {"base_0_rgb": np.True_}}
+
+    out1 = transform(make_item(1))
+    assert np.array_equal(out1["image_mask"]["base_0_rgb"], np.array([False, False, True]))
+    assert np.array_equal(out1["image"]["base_0_rgb"][:, 0, 0, 0], np.array([1, 1, 1], dtype=np.uint8))
+
+    out2 = transform(make_item(2))
+    assert np.array_equal(out2["image_mask"]["base_0_rgb"], np.array([False, False, True]))
+    assert np.array_equal(out2["image"]["base_0_rgb"][:, 0, 0, 0], np.array([2, 2, 2], dtype=np.uint8))
+
+    out3 = transform(make_item(3))
+    assert np.array_equal(out3["image_mask"]["base_0_rgb"], np.array([False, True, True]))
+    assert np.array_equal(out3["image"]["base_0_rgb"][:, 0, 0, 0], np.array([1, 1, 3], dtype=np.uint8))
+
+    out5 = transform(make_item(4))
+    out5 = transform(make_item(5))
+    assert np.array_equal(out5["image_mask"]["base_0_rgb"], np.array([True, True, True]))
+    assert np.array_equal(out5["image"]["base_0_rgb"][:, 0, 0, 0], np.array([1, 3, 5], dtype=np.uint8))

@@ -21,6 +21,7 @@ class Pi0Config(_model.BaseModelConfig):
     paligemma_variant: _gemma.Variant = "gemma_2b"
     action_expert_variant: _gemma.Variant = "gemma_300m"
     memory_num_frames: int = 1
+    memory_frame_stride: int = 1
     memory_history_pool_tokens: int = 8
     memory_keep_current_full_tokens: bool = True
 
@@ -36,6 +37,10 @@ class Pi0Config(_model.BaseModelConfig):
     discrete_state_input: bool = None  # type: ignore
 
     def __post_init__(self):
+        if self.memory_num_frames < 1:
+            raise ValueError("memory_num_frames must be >= 1")
+        if self.memory_frame_stride < 1:
+            raise ValueError("memory_frame_stride must be >= 1")
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:

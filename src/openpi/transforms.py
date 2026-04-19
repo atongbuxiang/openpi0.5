@@ -204,6 +204,7 @@ class StackHistory(DataTransformFn):
     """
 
     num_frames: int
+    frame_stride: int = 1
     image_keys: Sequence[str] | None = None
 
     def __call__(self, data: DataDict) -> DataDict:
@@ -227,8 +228,12 @@ class StackHistory(DataTransformFn):
 
             if image.shape[0] != self.num_frames:
                 if image.shape[0] > self.num_frames:
-                    image = image[-self.num_frames :]
-                    mask = np.asarray(mask)[-self.num_frames :]
+                    image, mask = _sample_history_frames(
+                        image,
+                        np.asarray(mask, dtype=np.bool_),
+                        num_frames=self.num_frames,
+                        frame_stride=self.frame_stride,
+                    )
                 else:
                     pad_count = self.num_frames - image.shape[0]
                     image_pad = np.repeat(image[:1], pad_count, axis=0)
@@ -250,10 +255,12 @@ class OnlineHistoryBuffer(DataTransformFn):
     """
 
     num_frames: int
+    frame_stride: int = 1
     image_keys: Sequence[str] | None = None
 
     def __post_init__(self):
         self._buffers = {}
+        self._mask_buffers = {}
 
     def __call__(self, data: DataDict) -> DataDict:
         if self.num_frames <= 1 or "image" not in data:
@@ -266,30 +273,36 @@ class OnlineHistoryBuffer(DataTransformFn):
         for key in image_keys:
             image = np.asarray(output_images[key])
             if image.ndim == 4:
-                output_images[key] = image
                 mask = np.asarray(output_masks.get(key, np.ones((image.shape[0],), dtype=np.bool_)), dtype=np.bool_)
-                output_masks[key] = mask
-                self._buffers[key] = deque([frame.copy() for frame in image], maxlen=self.num_frames)
+                output_images[key], output_masks[key] = _sample_history_frames(
+                    image,
+                    mask,
+                    num_frames=self.num_frames,
+                    frame_stride=self.frame_stride,
+                )
+                max_history_frames = (self.num_frames - 1) * self.frame_stride + 1
+                self._buffers[key] = deque([frame.copy() for frame in image], maxlen=max_history_frames)
+                self._mask_buffers[key] = deque(mask.tolist(), maxlen=max_history_frames)
                 continue
             if image.ndim != 3:
                 raise ValueError(f"Expected image {key} to have ndim 3 or 4, got {image.shape}")
 
+            mask = bool(np.asarray(output_masks.get(key, np.True_)))
+            max_history_frames = (self.num_frames - 1) * self.frame_stride + 1
             if key not in self._buffers:
-                self._buffers[key] = deque(maxlen=self.num_frames)
+                self._buffers[key] = deque(maxlen=max_history_frames)
+                self._mask_buffers[key] = deque(maxlen=max_history_frames)
             self._buffers[key].append(image.copy())
+            self._mask_buffers[key].append(mask)
 
-            frames = list(self._buffers[key])
-            pad = self.num_frames - len(frames)
-            if pad > 0:
-                zero = np.zeros_like(image)
-                stacked = [zero for _ in range(pad)] + frames
-                mask = np.array([False] * pad + [True] * len(frames), dtype=np.bool_)
-            else:
-                stacked = frames
-                mask = np.ones((self.num_frames,), dtype=np.bool_)
-
-            output_images[key] = np.stack(stacked, axis=0)
-            output_masks[key] = mask
+            history_frames = np.stack(list(self._buffers[key]), axis=0)
+            history_masks = np.asarray(list(self._mask_buffers[key]), dtype=np.bool_)
+            output_images[key], output_masks[key] = _sample_history_frames(
+                history_frames,
+                history_masks,
+                num_frames=self.num_frames,
+                frame_stride=self.frame_stride,
+            )
 
         return {**data, "image": output_images, "image_mask": output_masks}
 
@@ -555,6 +568,41 @@ def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.
         pad_width[axis] = (0, target_dim - current_dim)
         return np.pad(x, pad_width, constant_values=value)
     return x
+
+
+def _sample_history_frames(
+    images: np.ndarray,
+    masks: np.ndarray,
+    *,
+    num_frames: int,
+    frame_stride: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample history frames from the end using a fixed stride, padding missing history."""
+    if images.ndim != 4:
+        raise ValueError(f"Expected images to have ndim 4, got {images.shape}")
+    if masks.ndim != 1:
+        raise ValueError(f"Expected masks to have ndim 1, got {masks.shape}")
+    if images.shape[0] != masks.shape[0]:
+        raise ValueError(f"Image/mask length mismatch: {images.shape[0]} vs {masks.shape[0]}")
+
+    indices = []
+    current_idx = images.shape[0] - 1
+    while current_idx >= 0 and len(indices) < num_frames:
+        indices.append(current_idx)
+        current_idx -= frame_stride
+    indices = list(reversed(indices))
+
+    sampled_images = images[indices]
+    sampled_masks = masks[indices]
+
+    pad_count = num_frames - len(indices)
+    if pad_count > 0:
+        image_pad = np.repeat(sampled_images[:1], pad_count, axis=0)
+        mask_pad = np.zeros((pad_count,), dtype=np.bool_)
+        sampled_images = np.concatenate([image_pad, sampled_images], axis=0)
+        sampled_masks = np.concatenate([mask_pad, sampled_masks], axis=0)
+
+    return sampled_images, sampled_masks.astype(np.bool_)
 
 
 def make_bool_mask(*dims: int) -> tuple[bool, ...]:

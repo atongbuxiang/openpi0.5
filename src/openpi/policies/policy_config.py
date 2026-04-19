@@ -79,7 +79,12 @@ def create_trained_policy(
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
             *(
-                [transforms.OnlineHistoryBuffer(train_config.model.memory_num_frames)]
+                [
+                    transforms.OnlineHistoryBuffer(
+                        train_config.model.memory_num_frames,
+                        frame_stride=train_config.model.memory_frame_stride,
+                    )
+                ]
                 if isinstance(train_config.model, _config.pi0_config.Pi0Config) and train_config.model.memory_num_frames > 1
                 else []
             ),

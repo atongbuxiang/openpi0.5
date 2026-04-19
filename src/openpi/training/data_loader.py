@@ -142,9 +142,11 @@ def create_torch_dataset(
         image_history_delta_timestamps = None
         if hasattr(model_config, "memory_num_frames"):
             memory_num_frames = getattr(model_config, "memory_num_frames", 1)
+            memory_frame_stride = getattr(model_config, "memory_frame_stride", 1)
             if memory_num_frames > 1:
                 image_history_delta_timestamps = [
-                    -(memory_num_frames - 1 - i) / dataset_meta.fps for i in range(memory_num_frames)
+                    -((memory_num_frames - 1 - i) * memory_frame_stride) / dataset_meta.fps
+                    for i in range(memory_num_frames)
                 ]
         delta_timestamps = {
             key: [t / dataset_meta.fps for t in range(model_config.action_horizon)]
@@ -179,9 +181,11 @@ def create_torch_dataset(
         image_history_delta_timestamps = None
         if hasattr(model_config, "memory_num_frames"):
             memory_num_frames = getattr(model_config, "memory_num_frames", 1)
+            memory_frame_stride = getattr(model_config, "memory_frame_stride", 1)
             if memory_num_frames > 1:
                 image_history_delta_timestamps = [
-                    -(memory_num_frames - 1 - i) / dataset_meta.fps for i in range(memory_num_frames)
+                    -((memory_num_frames - 1 - i) * memory_frame_stride) / dataset_meta.fps
+                    for i in range(memory_num_frames)
                 ]
         delta_timestamps = {
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys

@@ -117,7 +117,12 @@ class ModelTransformFactory(GroupFactory):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
         history_transforms = []
         if isinstance(model_config, pi0_config.Pi0Config) and model_config.memory_num_frames > 1:
-            history_transforms.append(_transforms.StackHistory(model_config.memory_num_frames))
+            history_transforms.append(
+                _transforms.StackHistory(
+                    model_config.memory_num_frames,
+                    frame_stride=model_config.memory_frame_stride,
+                )
+            )
         match model_config.model_type:
             case _model.ModelType.PI0:
                 return _transforms.Group(
@@ -1190,7 +1195,7 @@ _CONFIGS = [
                                 "cam_high": "observation.images.zed_rgb",
                             },
                             "state": "observation.state",
-                            "actions": "observation.state",
+                            "actions": "action",
                             "prompt": "prompt",
                         }
                     )

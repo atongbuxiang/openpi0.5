@@ -27,7 +27,7 @@ def test_pi0_model():
 
 def test_pi0_video_memory_model():
     key = jax.random.key(0)
-    config = pi0_config.Pi0Config(memory_num_frames=4, memory_history_pool_tokens=4)
+    config = pi0_config.Pi0Config(memory_num_frames=4, memory_frame_stride=2, memory_history_pool_tokens=4)
     model = config.create(key)
 
     batch_size = 2
