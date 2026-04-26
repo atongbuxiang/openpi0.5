@@ -51,7 +51,7 @@ SequenceLike = tuple[bool, ...] | list[bool]
 
 @dataclasses.dataclass(frozen=True)
 class Options:
-    dataset_root: str = "data/pick_apple_4_18"
+    dataset_root: str = "data/fold_all"
     output_dir: str | None = None
     action_horizon: int = 32
     state_key: str = "observation.state"
