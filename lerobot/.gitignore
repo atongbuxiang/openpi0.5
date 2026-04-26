@@ -20,6 +20,7 @@ wandb
 # Data
 data
 outputs
+*.safetensors
 
 # Apple
 .DS_Store
